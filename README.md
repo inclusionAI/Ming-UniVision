@@ -56,43 +56,6 @@ MingTok-Vision achieves strong image reconstruction capability and Ming-UniVisio
 ### Image Reconstruction 
 
 MingTok-Vision achieves competitive reconstruction quality with high PSNR and low rFID, demonstrating its ability to preserve both perceptual fidelity and semantic structure in a continuous representation.
-<style>
-  body {
-      font-family: Arial, sans-serif;
-      margin: 20px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-    th, td {
-      border: 1px solid #ccc;
-      padding: 6px 8px;
-      text-align: center;
-    }
-    thead th {
-      background-color: transparent;
-      font-weight: bold;
-    }
-    .section-row {
-      background-color: transparent;
-      text-align: center;
-      font-style: italic;
-    }
-    .uparrow {
-      font-size: 10px; vertical-align: super;
-    }
-    .dagger {
-      font-size: 10px; color: gray;
-    }
-    caption {
-      font-weight: bold;
-      font-size: 14px;
-      margin: 10px 0;
-      text-align: left;
-    }
-</style>
 
 <table>
   <caption>
@@ -223,45 +186,6 @@ MingTok-Vision achieves competitive reconstruction quality with high PSNR and lo
 <div class="footnote">
   <strong>†</strong> denotes using semantic decoder after joint pre-training.
 </div>
-
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>Quantitative Evaluations on Multimodal Benchmarks</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 20px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-    th, td {
-      border: 1px solid #ccc;
-      padding: 6px 8px;
-      text-align: center;
-    }
-    thead th {
-      background-color: transparent;
-      font-weight: bold;
-    }
-    .section-row {
-      background-color: #f9f9f9;
-      text-align: center;
-      font-style: italic;
-    }
-    .dash-line {
-      border-top: 1px dashed #aaa;
-    }
-    .uparrow {
-      font-size: 10px; vertical-align: super;
-    }
-  </style>
-</head>
-<body>
 
 ### Visual Understanding
 Ming-UniVision achieves competitive performance on multimodal understanding benchmarks, showing that continuous latent tokens can effectively support high-level vision-language reasoning without discrete quantization.
@@ -524,51 +448,6 @@ Ming-UniVision achieves competitive performance on multimodal understanding benc
 ### Visual Generation
 
 Ming-UniVision achieves top performance among unified representation models in text-to-image generation, demonstrating superior object composition and spatial reasoning capabilities.
-
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>Text-to-Image Generation Evaluation</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 20px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-    th, td {
-      border: 1px solid #ccc;
-      padding: 6px 8px;
-      text-align: center;
-    }
-    thead th {
-      background-color: transparent;
-      font-weight: bold;
-    }
-    .section-row {
-      background-color: transparent;
-      text-align: center;
-      font-style: italic;
-    }
-    .uparrow {
-      font-size: 10px; vertical-align: super;
-    }
-    .dagger {
-      font-size: 10px; color: gray;
-    }
-    caption {
-      font-weight: bold;
-      font-size: 14px;
-      margin: 10px 0;
-      text-align: left;
-    }
-  </style>
-</head>
-<body>
 
 <table>
   <caption>
