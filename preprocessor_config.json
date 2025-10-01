@@ -1,0 +1,42 @@
+{
+    "auto_map": {
+        "AutoImageProcessor": "image_processing_bailingmm.BailingMMImageProcessor",
+        "AutoProcessor": "processing_bailingmm.BailingMMProcessor"
+    },
+    "min_pixels": 78400,
+    "max_pixels": 802816,
+    "patch_size": 14,
+    "temporal_patch_size": 2,
+    "merge_size": 2,
+    "image_mean": [
+        0.48145466,
+        0.4578275,
+        0.40821073
+    ],
+    "image_std": [
+        0.26862954,
+        0.26130258,
+        0.27577711
+    ],
+    "image_token": "<image>",
+    "video_token": "<video>",
+    "image_processor_type": "BailingMMImageProcessor",
+    "audio_token": "<audio>",
+    "chunk_length": 30,
+    "dither": 0.0,
+    "feature_size": 80,
+    "frame_length": 25,
+    "frame_shift": 10,
+    "inverse_norm": true,
+    "lfr_m": 7,
+    "lfr_n": 6,
+    "n_samples": 480000,
+    "num_audio_tokens": 256,
+    "sampling_rate": 16000,
+    "up_sample": true,
+    "return_attention_mask": true,
+    "padding_side": "right",
+    "padding_value": 0.0,
+    "processor_class": "BailingMMProcessor"
+}
+

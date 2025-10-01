@@ -1,0 +1,27 @@
+{
+    "pretrained_checkpoint": "",
+    "low_level_encoder": {
+        "img_size": 512,
+        "patch_size": 32,
+        "depth": 12,
+        "embed_dim": 768,
+        "ffn_layer": "swiglufused",
+        "out_dim": 32
+    },
+    "semantic_decoder": {
+        "in_dim": 32,
+        "patch_size": 32,
+        "embed_dim": 1024,
+        "decoder_depth": 24,
+        "ffn_layer":"swiglufused"
+    },
+    "pixel_decoder": {
+        "patch_size": 16,
+        "decoder_depth": 24,
+        "norm_pix_loss": true,
+        "embed_dim": 1024,
+        "loss_type": "L1-plain"
+    },
+    "scaling_factor": 8.09449291,
+    "mean": 1.46817409
+}
