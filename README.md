@@ -26,7 +26,7 @@ All modalities and tasks share one coherent feature space — simpler training, 
 
 
 <p align="center">
-    <img src="./figures/mingtok-overall.png" width="600"/>
+    <img src="./figures/mingtok-overall.jpg" width="600"/>
 <p>
 
 ## 📌 Updates
