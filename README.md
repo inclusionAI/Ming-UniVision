@@ -14,7 +14,7 @@
 Trained on high-fidelity continuous visual representations, Ming-UniVision supports multi-round, in-context vision-language interactions, such as iterative question answering, image generation, and semantic editing — all without needing to decode intermediate states into pixels. This enables efficient, coherent, and human-like multimodal dialogue with consistent feature dynamics throughout.
 
 - 🌐 **First NTP MLLM with Continuous Unified Vision Representations**: [Ming-UniVision](https://huggingface.co/inclusionAI/Ming-UniVision-16B-A3B)
-unifies vision and language via next-token prediction using continuous visual representations — no quantization, no modality-specific heads.
+unifies vision and language via next-token prediction using continuous visual tokens — no discrete quantization, full autoregressive generative paradigm, and support for both understanding and generation in a shared latent space.
 - 🖼️ **First Continuous Unified Visual Tokenizer:** [MingTok-Vision](https://huggingface.co/inclusionAI/MingTok-Vision)
 enables both understanding and generation in a single continuous space, preserving semantic and perceptual quality.
 - ⚡ **3.5× Faster Training Convergence:**
