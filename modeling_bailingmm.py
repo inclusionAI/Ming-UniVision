@@ -99,7 +99,7 @@ class MingUniVisionForConditionalGeneration(PreTrainedModel):
         self.llm_dytpe = torch.bfloat16
 
         # Load mingtok.
-        # self.vision = MingTok.from_pretrained("inclusionAI/MingTok-Vision")
+        self.vision = MingTok.from_pretrained("./models/MingTok-Vision")
         print('self.vision.feature_dim', self.vision.feature_dim)
         print('self.vision.image_emb_dim_for_gen', self.vision.latent_dim)
 

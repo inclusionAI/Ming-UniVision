@@ -714,9 +714,14 @@ Ming-UniVision achieves top performance among unified representation models in t
 First, clone the repository and install the required dependencies:
 
 ```bash
-pip install -r requirements.txt
 git clone https://github.com/inclusionAI/Ming-UniVision.git
 cd Ming-UniVision
+conda create -n ming python=3.10 -y
+conda activate ming
+pip install -r requirements.txt
+pip install flash_attn
+modelscope download --model inclusionAI/Ming-UniVision-16B-A3B --local_dir ./models/Ming-UniVision-16B-A3B
+modelscope download --model inclusionAI/MingTok-Vision --local_dir ./models/MingTok-Vision
 ```
 
 ### 🖼️ Image Reconstruction with MingTok-Vision
@@ -732,7 +737,7 @@ from mingtok.utils import CenterCropProcessor
 
 if __name__ == "__main__":
     # Load model
-    mingtok_model = MingTok.from_pretrained("inclusionAI/MingTok-Vision")
+    mingtok_model = MingTok.from_pretrained("./models/MingTok-Vision")
     mingtok_model = mingtok_model.cuda()
 
     img_path = "mingtok/asset/mingtok.png"
@@ -762,7 +767,7 @@ Use MingUniVisionInfer for unified tasks including text-to-image generation, ima
 from mingunivisioninfer import MingUniVisionInfer, tensor_to_pil
 
 # Initialize model
-model = MingUniVisionInfer("inclusionAI/Ming-UniVision-16B-A3B")
+model = MingUniVisionInfer("./models/Ming-UniVision-16B-A3B")
 
 # Text-to-image generation
 image_gen_prompt = "A beautiful girl."
