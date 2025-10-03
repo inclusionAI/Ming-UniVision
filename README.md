@@ -811,7 +811,7 @@ print("Answer:", output_text)
 📌 Tips:
 - Set image_gen=True when generating images.
 - Supported input types: "text" and "image" in message list.
-- The model supports multi-round conversations by appending previous history to messages.
+- The model supports multi-round conversations by appending previous history to messages. (currently not supported, will be released in the coming weeks)
 
 Note: We test the examples on hardware of NVIDIA H800-80GB/H20-96G with CUDA 12.4.
 
