@@ -110,10 +110,8 @@ class RectifiedFlowLoss(nn.Module):
             t_mid = torch.normal(mean=0.0, std=1.0, size=(batch_size,), device=target.device)
             t = 1 / (1 + torch.exp(-t_mid))
 
-        # # 生成标准正态分布，然后映射到 [0, 1]
         sigma = 0.5
         beta = 0
-        # t = torch.sigmoid(torch.randn(batch_size, device=target.device)*sigma+beta)   
 
         # 在t处插值得到x_t = (1-t)*x_0 + t*x_1，其中x_1是噪声，x_0是真实数据
         noise = torch.randn_like(target)
@@ -141,35 +139,14 @@ class RectifiedFlowLoss(nn.Module):
         """保持与原DiffLoss相同的接口进行采样"""
         batch_size = z.shape[0]
         device = z.device
-        img_cfg = False
         text_cfg = cfg 
-        image_cfg = 2.5
-        cfg_mode = 0
 
-        # 从环境变量获取CFG配置参数
-        import os
-        cfg_mode = int(os.environ.get('CFG_MODE', '1'))
-        text_cfg = float(os.environ.get('TEXT_CFG', str(cfg)))
-        image_cfg = float(os.environ.get('IMAGE_CFG', str(cfg)))
-        # print('cfgmode:',cfg_mode,',text_cfg:',text_cfg,',image_cfg:',image_cfg)
-        b_num = 4
-        # import pdb; pdb.set_trace()
-
-        # 初始化为纯噪声
-        if cfg != 1.0 and not img_cfg:
-            # 使用分类器引导时
-            # print(f"Using cfg: {cfg}, temperature: {temperature}")
+        if cfg != 1.0:
             noise = torch.randn(batch_size // 2, self.in_channels, device=device)
             noise = torch.cat([noise, noise], dim=0) * temperature
             use_cfg = True
             b_num=2
-        elif cfg!=1.0 and img_cfg:
-            noise = torch.randn(batch_size // 4, self.in_channels, device=device)
-            noise = torch.cat([noise, noise,noise,noise], dim=0) * temperature
-            use_cfg = True
-            b_num=4
         else:
-            # 不使用分类器引导
             noise = torch.randn(batch_size, self.in_channels, device=device) * temperature
             use_cfg = False
             b_num=1        
@@ -197,55 +174,17 @@ class RectifiedFlowLoss(nn.Module):
                 if use_cfg:
                     # 分类器引导
                     half = x[: batch_size // b_num]
-                    if b_num==2:
-                        combined = torch.cat([half, half], dim=0)
-                    elif b_num==4:
-                        combined = torch.cat([half, half, half, half], dim=0)
+                    combined = torch.cat([half, half], dim=0)
                     v_combined = self.net(combined, t_batch, z)
-
-                    if b_num==4:
-                        v_full, v_uncond, v_img, v_text = v_combined.chunk(4)
-
-                        # 根据 cfg_mode 选择组合公式
-                        if cfg_mode == 1:
-                            # M1: 链式引导，先图像，再文本
-                            v_guided = v_uncond + image_cfg * (v_img - v_uncond) + text_cfg * (v_full - v_img)
-                        elif cfg_mode == 2:
-                            # M2: 示例中的一种模式
-                            v_guided = v_uncond + 3 * (v_img - v_uncond) + text_cfg * (v_full - v_img)
-                        elif cfg_mode == 3:
-                            # M3: 文本条件作为基准进行图像引导
-                            v_guided = v_text + image_cfg * (v_full - v_text)
-                        elif cfg_mode == 4:
-                            # M4: 链式引导，先文本，再图像
-                            v_guided = v_uncond + text_cfg * (v_text - v_uncond) + image_cfg * (v_full - v_text)
-                        elif cfg_mode == 5:
-                            # M5: 图像条件作为基准进行文本引导
-                            v_guided = v_img + text_cfg * (v_full - v_img)
-                        elif cfg_mode == 6:
-                            # M6: 平行引导，所有增量都基于 uncond
-                            v_guided = v_uncond + text_cfg * (v_text - v_uncond) + image_cfg * (v_img - v_uncond)
-                        elif cfg_mode == 0:
-                            v_guided = v_uncond + text_cfg * (v_full - v_uncond)
-                        elif cfg_mode == 10:
-                            o = v_img + text_cfg * (v_full - v_img)
-                            v_guided = v_text + image_cfg * (o - v_text)
-                        else:
-                            raise ValueError(f"Unsupported cfg_mode: {cfg_mode}")
-
-                        v = v_guided
-                        v = torch.cat([v, v, v, v], dim=0)
-                    else:
-                        v_cond, v_uncond = torch.split(v_combined, batch_size // 2, dim=0)
-                        v = v_uncond + cfg * (v_cond - v_uncond)
-                        if cfg_renorm_type == "channel":
-                            # cfg renorm
-                            norm_v_cond = torch.norm(v_cond, dim=-1, keepdim=True)
-                            norm_v = torch.norm(v, dim=-1, keepdim=True)
-                            scale = (norm_v_cond / norm_v + 1e-8).clamp(min=0.0, max=1.0)
-                            v = v * scale
-                        # 重复以匹配原始形状
-                        v = torch.cat([v, v], dim=0)
+                    v_cond, v_uncond = torch.split(v_combined, batch_size // 2, dim=0)
+                    v = v_uncond + cfg * (v_cond - v_uncond)
+                    if cfg_renorm_type == "channel":
+                        # cfg renorm
+                        norm_v_cond = torch.norm(v_cond, dim=-1, keepdim=True)
+                        norm_v = torch.norm(v, dim=-1, keepdim=True)
+                        scale = (norm_v_cond / norm_v + 1e-8).clamp(min=0.0, max=1.0)
+                        v = v * scale
+                    v = torch.cat([v, v], dim=0)
                 else:
                     v = self.net(x, t_batch, z)
 
@@ -437,31 +376,6 @@ class SimpleMLPAdaLN(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    # def forward(self, x, t, c):
-    #     """
-    #     Apply the model to an input batch.
-    #     :param x: an [N x C] Tensor of inputs.
-    #     :param t: a 1-D batch of timesteps.
-    #     :param c: conditioning from AR transformer.
-    #     :return: an [N x C] Tensor of outputs.
-    #     """
-    #     # import ipdb;ipdb.set_trace()
-    #     x = self.input_proj(x)
-    #     t = self.time_embed(t)
-    #     c = self.cond_embed(c)
-
-    #     y = t + c
-
-    #     if self.grad_checkpointing and not torch.jit.is_scripting():
-    #         for block in self.res_blocks:
-    #             x = checkpoint(block, x, y)
-    #     else:
-    #         for block in self.res_blocks:
-    #             x = block(x, y)
-
-    #     return self.final_layer(x, y)
-
-    # 以下是SimpleMLPAdaLN的forward方法，需要适应时间步t是标量而非整数
     def forward(self, x, t, c):
         """
         Apply the model to an input batch.
@@ -471,8 +385,7 @@ class SimpleMLPAdaLN(nn.Module):
         :return: velocity field prediction
         """
         x = self.input_proj(x)
-        # 将t从[0,1]映射到网络期望的范围
-        t = t * 1000  # 简单缩放让embedding有意义
+        t = t * 1000 
         t = self.time_embed(t)
         c = self.cond_embed(c)
 
@@ -496,29 +409,3 @@ class SimpleMLPAdaLN(nn.Module):
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)
         return torch.cat([eps, rest], dim=1)
-
-if __name__ == "__main__":
-    # a = RectifiedFlowLoss(
-    #     target_channels=32, 
-    #     z_channels=3584, 
-    #     depth=12, 
-    #     width=3072, 
-    #     num_sampling_steps="16", 
-    #     mlp_mult=4., 
-    #     grad_checkpointing=False)
-    # num = 0
-    # for k, v in a.named_parameters():
-    #     num += v.numel()
-    # print(num)
-    a = TimestepEmbedder(1024)
-    print("running b")
-    b = a(torch.rand(8, device="cpu"))
-    print("running c")
-    c = a(torch.rand(8, device="cpu"))
-    print("running d")
-    d = a(torch.rand(8, device="cpu"))
-    print("ok")
-
-    # ckpt = torch.load("/video_hy2/workspace/yuandan.zdd/diffusion_ar_vgen/logs_diffonly/test_h20_uniae_huge_64node_new1024_gpt2.1_rope2_vae_uniae_huge_uniaediffonly_pishi_1e-42025-04-14_21:39:13/checkpoint-40.pth", map_location='cpu')
-    # import pdb; pdb.set_trace()
-    # print("")
