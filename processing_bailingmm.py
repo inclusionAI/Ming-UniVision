@@ -77,7 +77,7 @@ class BailingMMProcessorKwargs(ProcessingKwargs, total=False):
     }
 
 
-class MingTokProcessor():
+class MingTokUndProcessor():
     def __init__(self, image_size=224, mean=None, std=None):
         if mean is None:
             mean = (0.48145466, 0.4578275, 0.40821073)
@@ -92,6 +92,29 @@ class MingTokProcessor():
                 size=(image_size, image_size),
                 interpolation=InterpolationMode.BICUBIC,
             ),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std)
+        ])
+
+    def __call__(self, item):
+        return self.transform(item)
+
+class MingTokCenterCropProcessor():
+    def __init__(self, image_size=224, mean=None, std=None):
+        if mean is None:
+            mean = (0.48145466, 0.4578275, 0.40821073)
+        if std is None:
+            std = (0.26862954, 0.26130258, 0.27577711)
+        print(f"processor image_size: {image_size}")
+        print(f"processor mean: {mean}")
+        print(f"processor std: {std}")
+
+        self.transform = transforms.Compose([
+            transforms.Resize(
+                size=image_size,
+                interpolation=InterpolationMode.BICUBIC,
+            ),
+            transforms.CenterCrop(image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean, std)
         ])
@@ -149,7 +172,8 @@ class BailingMMProcessor(ProcessorMixin):
         self.image_token = image_token
         self.video_token = video_token
         self.audio_token = audio_token
-        self.vis_processor = MingTokProcessor(image_size=1024, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        self.vis_processor = MingTokUndProcessor(image_size=1024, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        self.gen_processor = MingTokCenterCropProcessor(image_size=512, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 
         if chat_template is None:
             chat_template = tokenizer.chat_template
@@ -163,6 +187,7 @@ class BailingMMProcessor(ProcessorMixin):
         videos=None,
         audios: Union[Tuple[np.ndarray, torch.Tensor, int], List[Tuple[np.ndarray, torch.Tensor, int]]] = None,
         text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
+        for_edit: Optional[bool] = False,
         **kwargs,
     ) -> BatchFeature:
         """
@@ -223,11 +248,16 @@ class BailingMMProcessor(ProcessorMixin):
         video_inputs = {}
         audio_inputs = {}
 
+        if for_edit:
+            processor = self.gen_processor
+        else:
+            processor = self.vis_processor
+
         if images is not None:
             processed_images = []
             vision_grid_thws = []
             for img in images:
-                img_tensor = self.vis_processor(img)
+                img_tensor = processor(img)
                 processed_images.append(img_tensor)
                 image_grid_thws = [1, img_tensor.shape[1] // image_patch_size, img_tensor.shape[2] // image_patch_size]
                 vision_grid_thws.append(image_grid_thws)
@@ -245,9 +275,101 @@ class BailingMMProcessor(ProcessorMixin):
 
         # Padding side can be in TextKwargs but is not accepted by the tokenizer
         _ = output_kwargs["text_kwargs"].pop("padding_side", None)
-        text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
+        text_inputs = self.tokenize(text, **output_kwargs["text_kwargs"])
 
         return BatchFeature(data={**text_inputs, **image_inputs, **video_inputs, **audio_inputs})
+    
+    def tokenize(self, text, **output_kwargs):
+        text_kwargs = output_kwargs.get("text_kwargs", {})
+        encoded = self.tokenizer(text, **text_kwargs)
+        input_ids = encoded["input_ids"]
+        attention_mask = encoded["attention_mask"]
+
+        if isinstance(input_ids, (list, tuple)) and not isinstance(input_ids[0], (list, tuple)):
+            input_ids = [input_ids]
+            attention_mask = [attention_mask] if attention_mask is not None else None
+
+        user_prefix_ids = self.tokenizer.encode(USER_PREFIX, add_special_tokens=False)
+        assistant_prefix_ids = self.tokenizer.encode(ASSISTANT_PREFIX, add_special_tokens=False)
+
+
+        image_start_id = self.tokenizer.convert_tokens_to_ids(DEFAULT_IM_START_TOKEN)
+        image_patch_id = self.tokenizer.convert_tokens_to_ids(DEFAULT_IMAGE_PATCH_TOKEN)
+        image_end_id = self.tokenizer.convert_tokens_to_ids(DEFAULT_IM_END_TOKEN)
+        image_token_ids = {image_start_id, image_patch_id, image_end_id}
+
+        uncond_attention_mask = []
+        text_uncond_attention_mask = []
+        for seq in input_ids:
+            user_positions = self._find_all_subsequences(seq, user_prefix_ids)
+            assistant_positions = self._find_all_subsequences(seq, assistant_prefix_ids)
+
+            # building uncond attention mask
+            mask = [1] * len(seq)  # 初始化全 1
+            if user_positions:
+                last_user_start = user_positions[-1]
+                # 查找在 last_user_start 之后第一个出现的 ASSISTANT
+                next_assistant_start = None
+                for pos in assistant_positions:
+                    if pos >= last_user_start:
+                        next_assistant_start = pos
+                        break
+                
+                if next_assistant_start is None:
+                    # 如果没找到对应的 ASSISTANT（不完整对话），可以选择报错或跳过
+                    # 这里我们选择跳过，保持 mask 全 1
+                    pass
+                else:
+                    # 将 [last_user_start 开始的 HUMAN tag 结束处, next_assistant_start) 区间置为 0
+                    zero_start = last_user_start + len(user_prefix_ids)
+                    zero_end = next_assistant_start  # 不包含 ASSISTANT tag 本身
+                    for i in range(zero_start, zero_end):
+                        mask[i] = 0
+            uncond_attention_mask.append(mask)
+
+            # building text uncond attention mask
+            text_mask = [1] * len(seq)  # 默认全 1
+            if user_positions:
+                last_user_start = user_positions[-1]
+                next_assistant_start = None
+                for pos in assistant_positions:
+                    if pos >= last_user_start:
+                        next_assistant_start = pos
+                        break
+
+                # 确定用户最后一轮输入范围
+                user_input_start = last_user_start + len(user_prefix_ids)
+                user_input_end = next_assistant_start if next_assistant_start is not None else len(seq)
+
+                # 仅在此区间内，把图像 token 设为 0
+                for i in range(user_input_start, user_input_end):
+                    if seq[i] not in image_token_ids:
+                        text_mask[i] = 0
+
+            text_uncond_attention_mask.append(text_mask)
+        
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        attention_mask = torch.tensor(attention_mask, dtype=torch.long) if attention_mask is not None else None
+        uncond_attention_mask = torch.tensor(uncond_attention_mask, dtype=torch.long)
+        text_uncond_attention_mask = torch.tensor(text_uncond_attention_mask, dtype=torch.long)
+        
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "uncond_attention_mask": uncond_attention_mask,
+            "text_uncond_attention_mask": text_uncond_attention_mask,
+        }
+
+
+    def _find_all_subsequences(self, sequence, subsequence):
+        positions = []
+        n, m = len(sequence), len(subsequence)
+        if m == 0:
+            return positions
+        for i in range(n - m + 1):
+            if sequence[i:i+m] == subsequence:
+                positions.append(i)
+        return positions
 
     def apply_system_template(self, text):
         return USER_PREFIX

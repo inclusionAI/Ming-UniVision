@@ -1,4 +1,7 @@
 torch==2.6.0
+torchvision
+torchaudio
+gradio
 tokenizers
 grouped_gemm==0.1.4
 funasr==1.1.14
@@ -19,12 +22,9 @@ av==12.3.0
 soundfile==0.12.1
 librosa
 rich
-mmgw-python
 transformers==4.52.4
 # flash_attn==2.7.0  # to accelerate installation process, please install  ${YOUR_MODEL_PATH}/flash_attn-2.7.0.post1%2Bcu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
 wget
 IPython
-torchvision
-torchaudio
 vllm
 pandas==2.3.2

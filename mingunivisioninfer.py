@@ -40,6 +40,7 @@ class MingUniVisionInfer:
         self.model_name_or_path = model_name_or_path
         self.model, self.tokenizer, self.processor = self.load_model_processor()
         self.model.tokenizer = self.tokenizer
+        self.model.model.tokenizer = self.tokenizer
 
     def load_model_processor(self):
         tokenizer = AutoTokenizer.from_pretrained(".", trust_remote_code=True)
@@ -55,7 +56,7 @@ class MingUniVisionInfer:
 
         return model, tokenizer, processor
 
-    def generate(self, messages, max_new_tokens=512, image_gen=False, **image_gen_param):
+    def generate(self, messages, max_new_tokens=512, output_image_prefix="output", for_edit=False):
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, use_system=True
         )
@@ -67,6 +68,7 @@ class MingUniVisionInfer:
             images=image_inputs,
             return_tensors="pt",
             image_patch_size=self.model.vision.patch_size,
+            for_edit=for_edit,
         ).to(self.model.device)
 
         for k in inputs.keys():
@@ -78,12 +80,8 @@ class MingUniVisionInfer:
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 use_cache=True,
-                image_gen=image_gen,
-                **image_gen_param,
+                output_image_prefix=output_image_prefix,
             )
-
-        if image_gen:
-            return generated_ids
 
         generated_ids_trimmed = [
             out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -94,84 +92,6 @@ class MingUniVisionInfer:
         )[0]
 
         return output_text
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name_or_path', type=str, default="inclusionAI/Ming-UniVision-16B-A3B")
-    parser.add_argument('--max_new_tokens', type=int, default=512)
-    args = parser.parse_args()
-
-    model_name_or_path = args.model_name_or_path
-    model = MingUniVisionInfer(model_name_or_path)
-
-    image_gen_prompt = "A beautiful girl."
-    messages = [
-        {
-            "role": "HUMAN",
-            "content": [
-                {"type": "text", "text": image_gen_prompt},
-            ],
-        }
-    ]
-
-    srt_time = time.time()
-    img_tensor = model.generate(messages, max_new_tokens=args.max_new_tokens, image_gen=True, image_gen_prompt=image_gen_prompt, image_gen_height=512, image_gen_width=512)
-    print(f"Generate time: {(time.time() - srt_time):.2f}s")
-    pil_img = tensor_to_pil(img_tensor)
-    pil_img.save("a_beautiful_girl.jpg")
-
-    messages = [
-        {
-            "role": "HUMAN",
-            "content": [
-                {"type": "image", "image": "a_beautiful_girl.jpg"},
-                {"type": "text", "text": "Please describe the picture."},
-            ],
-        }
-    ]
-
-    srt_time = time.time()
-    output_text = model.generate(messages, max_new_tokens=args.max_new_tokens)
-    print(f"Generate time: {(time.time() - srt_time):.2f}s")
-    print(output_text)
-
-    messages = [
-        {
-            "role": "HUMAN",
-            "content": [
-                {"type": "text", "text": "请详细介绍鹦鹉的生活习性。"}
-            ],
-        }
-    ]
-
-    srt_time = time.time()
-    output_text = model.generate(messages, max_new_tokens=args.max_new_tokens)
-    print(f"Generate time: {(time.time() - srt_time):.2f}s")
-    print(output_text)
-
-    messages = [
-        {
-            "role": "HUMAN",
-            "content": [
-                {"type": "text", "text": "中国的首都是哪里？"},
-            ],
-        },
-        {
-            "role": "ASSISTANT",
-            "content": [
-                {"type": "text", "text": "北京"},
-            ],
-        },
-        {
-            "role": "HUMAN",
-            "content": [
-                {"type": "text", "text": "它的占地面积是多少？有多少常住人口？"},
-            ],
-        },
-    ]
-
-    srt_time = time.time()
-    output_text = model.generate(messages, max_new_tokens=args.max_new_tokens)
-    print(f"Generate time: {(time.time() - srt_time):.2f}s")
-    print(output_text)
+    
+    def reset_inner_state(self):
+        self.model.reset_inner_state()

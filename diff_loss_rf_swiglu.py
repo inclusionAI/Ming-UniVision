@@ -110,9 +110,6 @@ class RectifiedFlowLoss(nn.Module):
             t_mid = torch.normal(mean=0.0, std=1.0, size=(batch_size,), device=target.device)
             t = 1 / (1 + torch.exp(-t_mid))
 
-        sigma = 0.5
-        beta = 0
-
         # 在t处插值得到x_t = (1-t)*x_0 + t*x_1，其中x_1是噪声，x_0是真实数据
         noise = torch.randn_like(target)
         t_view = t.view(-1, *([1] * (target.dim() - 1)))  # 适应任何维度的目标
@@ -135,27 +132,32 @@ class RectifiedFlowLoss(nn.Module):
 
         return loss
 
-    def sample(self, z, temperature=1.0, cfg=1.0, cfg_renorm_type=None, time_shifting_factor=None):
+    def sample(
+        self, 
+        z, 
+        temperature=1.0, 
+        text_cfg=1.0, 
+        image_cfg=1.0,
+        cfg_renorm_type=None, 
+        time_shifting_factor=None
+    ):
         """保持与原DiffLoss相同的接口进行采样"""
         batch_size = z.shape[0]
         device = z.device
-        text_cfg = cfg 
+        b_num = z.shape[0]
 
-        if cfg != 1.0:
-            noise = torch.randn(batch_size // 2, self.in_channels, device=device)
-            noise = torch.cat([noise, noise], dim=0) * temperature
-            use_cfg = True
-            b_num=2
+        if text_cfg != 1.0:
+            noise = torch.randn(1, self.in_channels, device=device)
+            noise = torch.cat([noise] * b_num, dim=0) * temperature
         else:
             noise = torch.randn(batch_size, self.in_channels, device=device) * temperature
-            use_cfg = False
-            b_num=1        
             
         # 使用欧拉法求解ODE
         x = noise
         steps = self.num_sampling_steps
         # import ipdb;ipdb.set_trace()
         if time_shifting_factor:
+            time_shifting_factor = float(time_shifting_factor)
             time_steps = torch.linspace(0.0, 1.0, steps + 1, device=device)
             time_steps = time_steps / (time_steps + time_shifting_factor - time_shifting_factor * time_steps)
             time_steps = 1 - time_steps
@@ -171,13 +173,27 @@ class RectifiedFlowLoss(nn.Module):
             
             # 预测速度场
             with torch.no_grad():
-                if use_cfg:
+                if b_num == 3:
+                    half = x[: batch_size // b_num]
+                    combined = torch.cat([half, half, half], dim=0)
+                    v_combined = self.net(combined, t_batch, z)
+                    v_cond, v_uncond, v_text_uncond = torch.split(v_combined, batch_size // 3, dim=0)
+                    v_guided = v_uncond + image_cfg * (v_text_uncond - v_uncond) + text_cfg * (v_cond - v_text_uncond)
+                    v = v_guided
+                    if cfg_renorm_type == "channel":
+                        # cfg renorm
+                        norm_v_cond = torch.norm(v_cond, dim=-1, keepdim=True)
+                        norm_v = torch.norm(v, dim=-1, keepdim=True)
+                        scale = (norm_v_cond / norm_v + 1e-8).clamp(min=0.0, max=1.0)
+                        v = v * scale
+                    v = torch.cat([v, v, v], dim=0)
+                elif b_num == 2:
                     # 分类器引导
                     half = x[: batch_size // b_num]
                     combined = torch.cat([half, half], dim=0)
                     v_combined = self.net(combined, t_batch, z)
                     v_cond, v_uncond = torch.split(v_combined, batch_size // 2, dim=0)
-                    v = v_uncond + cfg * (v_cond - v_uncond)
+                    v = v_uncond + text_cfg * (v_cond - v_uncond)
                     if cfg_renorm_type == "channel":
                         # cfg renorm
                         norm_v_cond = torch.norm(v_cond, dim=-1, keepdim=True)

@@ -18,15 +18,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch BailingMoE model."""
+import os
 import math
+from tqdm import tqdm
 import warnings
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Callable
 
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import CrossEntropyLoss
+
+import torchvision.transforms as T
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
@@ -77,6 +81,13 @@ logger = logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "BailingMoeConfig"
 
+def tensor_to_pil(image_tensor):
+    """将tensor转换为PIL图像"""
+    mean = torch.Tensor([0.5,0.5,0.5]).view(1,-1,1,1).cuda()
+    std = torch.Tensor([0.5,0.5,0.5]).view(1,-1,1,1).cuda()
+    image_tensor = (image_tensor*std + mean)[0]
+    image_tensor = T.ToPILImage()(image_tensor)
+    return image_tensor
 
 def _get_unpad_data(attention_mask):
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
@@ -127,6 +138,53 @@ class BailingMoeRMSNorm(nn.Module):
 
 ALL_LAYERNORM_LAYERS.append(BailingMoeRMSNorm)
 
+class MoeCausalLMOutputWithPastAndImage(MoeCausalLMOutputWithPast):
+    """
+    Extended output class for causal language model with mixture of experts and image tensor.
+
+    Args:
+        loss (`torch.FloatTensor` of shape `(1,)`, *optional*):
+            Language modeling loss (for next-token prediction).
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores before SoftMax.
+        aux_loss (`torch.FloatTensor`, *optional*):
+            Auxiliary loss for sparse MoE modules.
+        router_logits (`tuple(torch.FloatTensor)`, *optional*):
+            Router logit probabilities for each expert.
+        past_key_values (`Cache`, *optional*):
+            Pre-computed key/value caches for fast decoding.
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*):
+            Hidden states from all layers.
+        attentions (`tuple(torch.FloatTensor)`, *optional*):
+            Attention weights from all layers.
+        image_tensor (`torch.FloatTensor`, *optional*):
+            Image tensor (e.g., encoded vision features), of shape `(batch_size, num_channels, height, width)`
+            or `(batch_size, sequence_length, hidden_size)` depending on your vision encoder.
+    """
+
+    def __init__(
+        self,
+        loss: Optional[torch.FloatTensor] = None,
+        aux_loss: Optional[torch.FloatTensor] = None,
+        logits: Optional[torch.FloatTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None,
+        attentions: Optional[Tuple[torch.FloatTensor, ...]] = None,
+        router_logits: Optional[Tuple[torch.FloatTensor, ...]] = None,
+        image_tensor: Optional[torch.Tensor] = None,
+    ):
+        # 调用父类构造函数
+        super().__init__(
+            loss=loss,
+            aux_loss=aux_loss,
+            logits=logits,
+            past_key_values=past_key_values,
+            hidden_states=hidden_states,
+            attentions=attentions,
+            router_logits=router_logits,
+        )
+        # 添加新属性
+        self.image_tensor = image_tensor
 
 class BailingMoeRotaryEmbeddingLegacy(torch.nn.Module):
     def __init__(self, dim, base=10000, precision=torch.half, learnable=False):
@@ -1495,6 +1553,7 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
         # Initialize weights and apply final processing
         self.vis_head = None
         self.diffloss = None
+        self.num_generated_images = 0 # number of images generated per round, normally being 0 or 1
         self.post_init()
 
     def setup_vishead_diffloss(self,
@@ -1578,7 +1637,8 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
         audio_mask: Optional[torch.Tensor] = None,
         image_token_id=0,
         image_gen_temperature=1.0,
-        image_gen_cfg=1.0,
+        image_gen_text_cfg=3.0,
+        image_gen_image_cfg=1.1,
         cfg_renorm_type=None,
         time_shifting_factor=None,
         **kwargs,
@@ -1600,10 +1660,17 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
         b, n, _ = z_vis.shape
 
         z_vis = z_vis.reshape(b*n, -1)
-        sample_token = self.diffloss.sample(z_vis, image_gen_temperature, image_gen_cfg, cfg_renorm_type=cfg_renorm_type, time_shifting_factor=time_shifting_factor)
-        output_token = sample_token.unsqueeze(1)
+        sample_token = self.diffloss.sample(
+            z_vis, 
+            temperature=image_gen_temperature, 
+            text_cfg=image_gen_text_cfg, 
+            image_cfg=image_gen_image_cfg,
+            cfg_renorm_type=cfg_renorm_type, 
+            time_shifting_factor=time_shifting_factor
+        )
+        outupt_latent = sample_token.unsqueeze(1)
 
-        return output_token, model_output.past_key_values
+        return outupt_latent, model_output
 
     @add_start_docstrings_to_model_forward(BAILINGMOE_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=MoeCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
@@ -1611,6 +1678,8 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
+        uncond_attention_mask: Optional[torch.Tensor] = None,
+        text_uncond_attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
@@ -1622,33 +1691,72 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
         return_dict: Optional[bool] = None,
         image_mask: Optional[torch.Tensor] = None,
         audio_mask: Optional[torch.Tensor] = None,
+        latent_to_sem_func: Optional[Callable] = None,
+        linear_proj: Optional[nn.Module] = None,
+        sem_to_pix_func: Optional[Callable] = None,
+        output_image_prefix: Optional[str] = "output",
+        image_gen_text_cfg: Optional[float] = 3.0,
+        image_gen_image_cfg: Optional[float] = 1.1,
+        image_gen_temperature: Optional[float] = 1.0,
         **kwargs,
-    ) -> Union[Tuple, MoeCausalLMOutputWithPast]:
+    ) -> Union[Tuple, MoeCausalLMOutputWithPastAndImage]:
         r"""
-        Args:
-            labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
-                config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
-                (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
+            Forward pass for the BailingMoeForCausalLM model, supporting both standard causal language modeling and
+            conditional image generation when the input starts with the image start token.
 
-        Returns:
+            Args:
+                input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+                    Indices of input sequence tokens in the vocabulary. If the first token is `config.image_start_token`, 
+                    the model enters image generation mode. Otherwise, it performs standard language modeling.
+                attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
+                    Mask to avoid performing attention on padding tokens. 1 indicates valid tokens, 0 indicates padding.
+                uncond_attention_mask (`torch.Tensor`, *optional*):
+                    Attention mask for the unconditional (null-text) context used in classifier-free guidance during image generation.
+                text_uncond_attention_mask (`torch.Tensor`, *optional*):
+                    Additional attention mask for alternative unconditional text context, used if different from `uncond_attention_mask`.
+                position_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+                    Position indices for each token in the sequence. If not provided, will be inferred from attention_mask.
+                past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*):
+                    Contains pre-computed hidden-states (key and values in self-attention blocks) for fast decoding.
+                inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
+                    Optionally, pre-computed input embeddings. If provided, `input_ids` should be None.
+                labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+                    Labels for computing the masked language modeling loss. Tokens with indices set to `-100` are ignored.
+                    Only used in text generation mode.
+                use_cache (`bool`, *optional*):
+                    If set to `True`, `past_key_values` are returned and can be used for faster decoding.
+                output_attentions (`bool`, *optional*):
+                    Whether to return attentions weights.
+                output_hidden_states (`bool`, *optional*):
+                    Whether to return hidden states at all layers.
+                output_router_logits (`bool`, *optional*):
+                    Whether to return router logits from MoE layers.
+                return_dict (`bool`, *optional*):
+                    Whether to return a `MoeCausalLMOutputWithPastAndImage` instead of a plain tuple.
+                image_mask (`torch.Tensor`, *optional*):
+                    Mask indicating image token positions in the input sequence.
+                audio_mask (`torch.Tensor`, *optional*):
+                    Mask indicating audio token positions in the input sequence.
+                latent_to_sem_func (`Callable`, *optional*):
+                    Function mapping generated latent tokens to semantic features. Required during image generation.
+                linear_proj (`nn.Module`, *optional*):
+                    Linear projection from semantic tokens to input embeddings for next generation step.
+                sem_to_pix_func (`Callable`, *optional*):
+                    Function that decodes concatenated semantic tokens into a full image tensor
+                output_image_prefix (`str`, *optional*, defaults to `"output"`):
+                    Prefix for saving generated images. Files are saved as `output_image_prefix.png` or `output_image_prefix_i.png`.
 
-        Example:
-
-        ```python
-        >>> from transformers import AutoTokenizer
-
-        >>> model = BailingMoeForCausalLM.from_pretrained(PATH_TO_CONVERTED_WEIGHTS)
-        >>> tokenizer = AutoTokenizer.from_pretrained(PATH_TO_CONVERTED_TOKENIZER)
-
-        >>> prompt = "Hey, are you conscious? Can you talk to me?"
-        >>> inputs = tokenizer(prompt, return_tensors="pt")
-
-        >>> # Generate
-        >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
-        >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
-        ```"""
+            Returns:
+                `MoeCausalLMOutputWithPastAndImage` or `tuple`:
+                    - **loss** (`torch.FloatTensor`, *optional*) — Language modeling loss (only in text mode).
+                    - **aux_loss** (`torch.FloatTensor`, *optional*) — Auxiliary loss from MoE routing.
+                    - **logits** (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`) — Prediction scores for each vocabulary token.
+                    - **past_key_values** — Cached key/value states for fast autoregressive decoding.
+                    - **hidden_states** — Optional tuple of hidden states at each layer.
+                    - **attentions** — Optional tuple of attention weights.
+                    - **router_logits** — Optional tuple of router logit outputs from MoE layers.
+                    - **image_tensor** (`torch.FloatTensor`, *optional*) — Generated image tensor of shape `(1, C, H, W)` when in image generation mode; otherwise `None`.
+            """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -1658,49 +1766,68 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            output_router_logits=output_router_logits,
-            return_dict=return_dict,
-            image_mask=image_mask,
-            audio_mask=audio_mask,
-            **kwargs,
-        )
+        if input_ids is not None and input_ids[0][0] == self.config.image_start_token:
+            image_tensor, outputs, attention_mask = self.generate_image(
+                input_embeds=self.model.word_embeddings(input_ids),
+                past_key_values=past_key_values,
+                attention_mask=attention_mask,
+                uncond_attention_mask=uncond_attention_mask,
+                text_uncond_attention_mask=text_uncond_attention_mask,
+                latent_to_sem_func=latent_to_sem_func,
+                linear_proj=linear_proj,
+                sem_to_pix_func=sem_to_pix_func,
+                image_gen_text_cfg=image_gen_text_cfg,
+                image_gen_image_cfg=image_gen_image_cfg,
+                image_gen_temperature=image_gen_temperature,
+            )
+            hidden_states = outputs[0][0:1]
+            logits = self.compute_logit(hidden_states=hidden_states)
+            logits = logits.float()
+            self.num_generated_images += 1
+            pil_image = tensor_to_pil(image_tensor.float())
+            for i in range(100):
+                if i == 0:
+                    output_image_name = f"{output_image_prefix}.png"
+                else:
+                    output_image_name = output_image_prefix + f"_{i}.png"
+                if not os.path.exists(output_image_name):
+                    print(f"Saving to {output_image_name}")
+                    pil_image.save(output_image_name)
+                    break
+        else:
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                output_router_logits=output_router_logits,
+                return_dict=return_dict,
+                image_mask=image_mask,
+                audio_mask=audio_mask,
+                **kwargs,
+            )
 
-        hidden_states = outputs[0]
+            hidden_states = outputs[0]
 
-        logits = self.compute_logit(hidden_states=hidden_states)
-        logits = logits.float()
+            logits = self.compute_logit(hidden_states=hidden_states)
+            logits = logits.float()
+
+            image_tensor = None
 
         loss = None
         aux_loss = None
-
-        if labels is not None:
-            # Shift so that tokens < n predict n
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, self.config.vocab_size)
-            shift_labels = shift_labels.view(-1)
-            # Enable model parallelism
-            shift_labels = shift_labels.to(shift_logits.device)
-            loss = loss_fct(shift_logits, shift_labels)
 
         if not return_dict:
             output = (logits,) + outputs[1:]
             if output_router_logits:
                 output = (aux_loss,) + output
             return (loss,) + output if loss is not None else output
-
-        return MoeCausalLMOutputWithPast(
+        
+        return MoeCausalLMOutputWithPastAndImage(
             loss=loss,
             aux_loss=aux_loss,
             logits=logits,
@@ -1708,7 +1835,135 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             router_logits=outputs.router_logits,
+            image_tensor=image_tensor,
         )
+    
+    def reset_image_gen_status(self):
+        self.num_generated_images = 0
+    
+    def generate_image(
+        self, 
+        input_embeds,
+        past_key_values, 
+        attention_mask,
+        uncond_attention_mask,
+        text_uncond_attention_mask,
+        latent_to_sem_func,
+        linear_proj,
+        sem_to_pix_func,
+        image_gen_text_cfg=3.0,
+        image_gen_image_cfg=1.1,
+        image_gen_temperature=1.0,
+    ):
+        cfg_schedule = "constant"
+        cfg_renorm_type = None
+        time_shifting_factor = None
+
+        output_tokens = []
+        feat_dec_past_key_values = None
+
+        assert attention_mask.shape[0] == 1
+
+        if uncond_attention_mask is not None:
+            n_cond = attention_mask.shape[1]
+            n_uncond = uncond_attention_mask.shape[1]
+            if n_uncond < n_cond:
+                # length of uncond attention mask is smaller than attention mask
+                uncond_attention_mask = torch.cat((
+                    uncond_attention_mask, attention_mask[:, n_uncond:]
+                ), dim=1)
+            attention_mask = torch.cat((attention_mask, uncond_attention_mask), dim=0)
+        
+        
+        if text_uncond_attention_mask is not None and text_uncond_attention_mask.sum() > 0:
+            n_cond = attention_mask.shape[1]
+            n_uncond = text_uncond_attention_mask.shape[1]
+            if n_uncond < n_cond:
+                text_uncond_attention_mask = torch.cat((
+                    text_uncond_attention_mask, attention_mask[0:1, n_uncond:]
+                ), dim=1)
+            if (text_uncond_attention_mask==uncond_attention_mask).sum() != uncond_attention_mask.numel():
+                print("add text_uncond")
+                attention_mask = torch.cat((attention_mask, text_uncond_attention_mask), dim=0)
+            else:
+                print("no add text_uncond")
+        
+        if attention_mask.shape[0] > 1:
+            input_embeds = input_embeds.repeat((attention_mask.shape[0], 1, 1))
+
+            new_key_cache_list = []
+            new_value_cache_list = []
+            for cache_layer_id in range(len(past_key_values.key_cache)):
+                new_key_cache = past_key_values.key_cache[cache_layer_id].repeat((attention_mask.shape[0], 1, 1, 1))
+                new_key_cache_list.append(new_key_cache)
+                new_value_cache = past_key_values.value_cache[cache_layer_id].repeat((attention_mask.shape[0], 1, 1, 1))
+                new_value_cache_list.append(new_value_cache)
+            past_key_values.key_cache = new_key_cache_list
+            past_key_values.value_cache = new_value_cache_list
+
+        for token_idx in tqdm(range(self.config.num_image_tokens_for_gen+1)):
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            if past_key_values is not None:
+                position_ids = position_ids[:, -1:]
+
+            if cfg_schedule == "linear":
+                text_cfg_iter = 1 + (image_gen_text_cfg - 1) * (256 - token_idx) / 256
+                image_cfg_iter = 1 + (image_gen_image_cfg - 1) * (256 - token_idx) / 256
+            elif cfg_schedule == "linear-reverse":
+                text_cfg_iter = 1 + (image_gen_text_cfg - 1) * token_idx / 255
+                image_cfg_iter = 1 + (image_gen_image_cfg - 1) * token_idx / 255
+            elif cfg_schedule == "constant":
+                text_cfg_iter = image_gen_text_cfg
+                image_cfg_iter = image_gen_image_cfg
+            else:
+                raise NotImplementedError
+            output_token_gen, model_output = self.forward_for_image_generation_inner(
+                inputs_embeds=input_embeds,
+                labels=None,
+                labels_img=None,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                image_token_id=token_idx,
+                image_gen_temperature=image_gen_temperature,
+                text_cfg=text_cfg_iter,
+                image_cfg=image_cfg_iter,
+                cfg_renorm_type=cfg_renorm_type,
+                time_shifting_factor=time_shifting_factor,
+                use_cache=True,
+            )
+            if token_idx < self.config.num_image_tokens_for_gen:
+                past_key_values = model_output.past_key_values
+
+                feat_dec_out = latent_to_sem_func(
+                    output_token_gen,
+                    past_key_values=feat_dec_past_key_values,
+                )
+                feat_dec_past_key_values = feat_dec_out['past_key_values']
+                output_token = feat_dec_out['x_norm_patchtokens']
+                output_tokens.append(output_token)
+
+                input_embeds = linear_proj(output_token)
+
+                attention_mask = torch.cat(
+                    (attention_mask, torch.ones(attention_mask.shape[0], 1, dtype=attention_mask.dtype, device=attention_mask.device)),
+                    dim=-1
+                )
+                
+        new_key_cache_list = []
+        new_value_cache_list = []
+        for cache_layer_id in range(len(past_key_values.key_cache)):
+            new_key_cache = past_key_values.key_cache[cache_layer_id][0:1]
+            new_key_cache_list.append(new_key_cache)
+            new_value_cache = past_key_values.value_cache[cache_layer_id][0:1]
+            new_value_cache_list.append(new_value_cache)
+        past_key_values.key_cache = new_key_cache_list
+        past_key_values.value_cache = new_value_cache_list
+
+        image_tensor = sem_to_pix_func(torch.cat(output_tokens, dim=1))
+        return image_tensor, model_output, attention_mask
+
 
     def prepare_inputs_for_generation(
         self, 
@@ -1721,25 +1976,32 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
         image_mask=None,
         audio_mask=None,
         rope_deltas=None,
+        uncond_attention_mask=None,
+        text_uncond_attention_mask=None,
+        latent_to_sem_func=None,
+        linear_proj=None,
+        sem_to_pix_func=None,
+        output_image_prefix="output",
+        image_gen_text_cfg=3.0,
+        image_gen_image_cfg=1.1,
+        image_gen_temperature=1.0,
         **kwargs
     ):
         if past_key_values is not None:
             if isinstance(past_key_values, Cache):
                 cache_length = past_key_values.get_seq_length()
-                past_length = past_key_values.seen_tokens
+                past_length = past_key_values.seen_tokens - self.num_generated_images * self.config.num_image_tokens_for_gen
                 max_cache_length = (
                     past_key_values.get_max_length()
                     if hasattr(past_key_values, "get_max_length")
                     else past_key_values.get_max_cache_shape()
                 )
             else:
-                cache_length = past_length = past_key_values[0][0].shape[2]
-                max_cache_length = None
+                raise NotImplementedError
             if inputs_embeds is not None:
                 input_ids = input_ids[:, -cache_position.shape[0]:]
             elif input_ids.shape[1] != cache_position.shape[0]:
                 input_ids = input_ids[:, cache_position]
-
             # Keep only the unprocessed tokens:
             # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
             # some of the inputs are exclusivelly passed as part of the cache (e.g. when passing input_embeds as input)
@@ -1751,6 +2013,12 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
                 input_ids = input_ids[:, past_length:]
             # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
 
+            if attention_mask.shape[1] < cache_length:
+                pad_attn_mask = torch.ones(attention_mask.shape[0], cache_length-attention_mask.shape[1]+input_ids.shape[0], dtype=attention_mask.dtype, device=attention_mask.device)
+                attention_mask = torch.cat((
+                    attention_mask, pad_attn_mask
+                ), dim=1)
+
             # If we are about to go beyond the maximum cache length, we need to crop the input attention mask.
             if (
                 max_cache_length is not None
@@ -1758,6 +2026,8 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
                 and cache_length + input_ids.shape[1] > max_cache_length
             ):
                 attention_mask = attention_mask[:, -max_cache_length:]
+                uncond_attention_mask = uncond_attention_mask[: -max_cache_length:]
+                text_uncond_attention_mask = text_uncond_attention_mask[: -max_cache_length:]
 
         if attention_mask is not None and position_ids is None:
             # create position_ids on the fly for batch generation
@@ -1796,6 +2066,15 @@ class BailingMoeForCausalLM(BailingMoePreTrainedModel, GenerationMixin):
                 "attention_mask": attention_mask,
                 "image_mask": image_mask,
                 "audio_mask": audio_mask,
+                "uncond_attention_mask": uncond_attention_mask,
+                "latent_to_sem_func": latent_to_sem_func,
+                "linear_proj": linear_proj,
+                "sem_to_pix_func": sem_to_pix_func,
+                "output_image_prefix": output_image_prefix,
+                "text_uncond_attention_mask": text_uncond_attention_mask,
+                "image_gen_text_cfg": image_gen_text_cfg,
+                "image_gen_image_cfg": image_gen_image_cfg,
+                "image_gen_temperature": image_gen_temperature,
             }
         )
         return model_inputs

@@ -99,7 +99,7 @@ class MingUniVisionForConditionalGeneration(PreTrainedModel):
         self.llm_dytpe = torch.bfloat16
 
         # Load mingtok.
-        # self.vision = MingTok.from_pretrained("inclusionAI/MingTok-Vision")
+        self.vision = MingTok.from_pretrained("inclusionAI/MingTok-Vision")
         print('self.vision.feature_dim', self.vision.feature_dim)
         print('self.vision.image_emb_dim_for_gen', self.vision.latent_dim)
 
@@ -121,6 +121,10 @@ class MingUniVisionForConditionalGeneration(PreTrainedModel):
         self.model.setup_vishead_diffloss(**self.config.vishead_diffloss_config)
 
         self.tokenizer = None
+        self.past_key_values = None
+        self.past_attention_mask = None
+        self.past_text_uncond_attention_mask = None
+        self.past_uncond_attention_mask = None
 
         self.post_init()
 
@@ -200,208 +204,12 @@ class MingUniVisionForConditionalGeneration(PreTrainedModel):
         return inputs_embeds, image_mask, audio_mask
 
     @torch.no_grad()
-    def unified_image_generation(
-        self,
-        caption,
-        image_gen_cfg=1.0,
-        with_separator=False,
-        cfg_schedule="constant",
-        image_gen_temperature=1.0,
-        cfg_renorm_type=None,
-        time_shifting_factor=None,
-    ):
-        gen_start_token = DEFAULT_IM_START_TOKEN
-        prompt = "Please generate the corresponding image based on the description."
-        if with_separator:
-            text_input = prompt + "\n" + caption
-        else:
-            text_input = prompt + caption
-
-        features = self.preprocess_text_for_image_generation(
-            text_input,
-            gen_start_token=gen_start_token,
-            uncond_prompt="",
-            # uncond_prompt=prompt + "\n" if with_separator else prompt,
-        )
-
-        print(f"input string: {self.tokenizer.decode(features['input_ids'])}", flush=True)
-        if image_gen_cfg > 1.0:
-            features['input_ids'] = torch.stack((features['input_ids'], features['input_ids']), dim=0)
-            features['attention_mask'] = torch.stack((features['attention_mask'], features['uncond_attention_mask']), dim=0)
-
-        image_tensor = self.forward_for_image_generation(
-            features,
-            image_gen_cfg=image_gen_cfg,
-            cfg_schedule=cfg_schedule,
-            image_gen_temperature=image_gen_temperature,
-            cfg_renorm_type=cfg_renorm_type,
-            time_shifting_factor=time_shifting_factor,
-        )
-        return image_tensor
-
-    def preprocess_text_for_image_generation(
-        self, 
-        text_input,
-        gen_start_token,
-        uncond_prompt
-    ):
-        roles = ["human", "gpt"]
-        sources = [
-            {"from": "human", "value": text_input},
-            {"from": "gpt", "value": gen_start_token},
-        ]
-
-        # Skip the first one if it is not from human
-        if sources[0]["from"] != "human":
-            sources = sources[1:]
-
-        input_text = ""
-        input_ids = []
-        attention_mask = []
-        uncond_text_ids = []
-        uncond_attention_mask = []
-
-        self.usr_prefix = GLM_USER_PREFIX
-        self.assistant_prefix = GLM_ASSISTANT_PREFIX
-        self.usr_prefix_id = (self.tokenizer(self.usr_prefix, return_tensors="pt")["input_ids"][0]).tolist()
-        self.assistant_prefix_id = (self.tokenizer(self.assistant_prefix, return_tensors="pt")["input_ids"][0]).tolist()
-
-        for j, sentence in enumerate(sources):
-            role = sentence["from"]
-            if j % 2 == 0:
-                assert role == roles[0]  # user
-                question = sentence["value"]
-
-                input_text += self.usr_prefix
-                input_ids.extend(self.usr_prefix_id)
-                uncond_text_ids.extend(self.usr_prefix_id)
-
-                input_text += question  # <role>HUMAN</role>Please generate the corresponding image based on the description.\nDraw a beautiful girl.'
-                question_id = (self.tokenizer(question, return_tensors="pt")["input_ids"][0]).tolist()
-                input_ids.extend(question_id)
-
-                uncond_question_id = (self.tokenizer(uncond_prompt, return_tensors="pt")["input_ids"][0]).tolist()
-                uncond_text_ids.extend(uncond_question_id)
-
-                # 获取当前 user turn 处理完后 input_ids 的总长度
-                # 这是为当前 turn 创建的所有 mask 的目标长度
-                current_turn_len = len(input_ids)
-
-                # 标准 attention_mask 总是全1
-                attention_mask.extend([1] * current_turn_len)
-                uncond_end_idx = len(self.usr_prefix_id) + len(uncond_question_id)
-                # uncond_attention_mask: 只有 prefix 和 uncond_prompt 是 1
-                uncond_attention_mask.extend([1] * uncond_end_idx + [0] * (current_turn_len - uncond_end_idx))
-                assert len(attention_mask) == len(uncond_attention_mask)
-
-            else:  # assistant
-                assert role == roles[1]
-                input_text += self.assistant_prefix
-                input_ids.extend(self.assistant_prefix_id)
-
-                input_text += sentence["value"]  # '<role>HUMAN</role>Please generate the corresponding image based on the description.\nDraw a beautiful girl.<role>ASSISTANT</role><image>'
-                answer_id = (self.tokenizer(sentence["value"], return_tensors="pt")["input_ids"][0]).tolist()
-
-                input_ids.extend(answer_id)
-                attention_mask.extend([1] * (len(input_ids) - len(attention_mask)))
-                uncond_attention_mask.extend([1] * (len(input_ids) - len(uncond_attention_mask)))
-                assert len(attention_mask) == len(uncond_attention_mask)
-
-        assert len(attention_mask) == len(input_ids)
-        assert len(attention_mask) == len(uncond_attention_mask) 
-
-        return dict(
-            input_ids=torch.tensor(input_ids),
-            attention_mask=torch.tensor(attention_mask),
-            uncond_attention_mask=torch.tensor(uncond_attention_mask),
-            input_text=input_text,  # just for debug, '<role>HUMAN</role>Please generate the corresponding image based on the description.\nDraw a beautiful girl.<role>ASSISTANT</role><image>'
-        )
-
-    @torch.no_grad()
-    def forward_for_image_generation(
-        self,
-        samples,
-        image_gen_cfg=1.0,
-        cfg_schedule="constant",
-        image_gen_temperature=1.0,
-        cfg_renorm_type=None,
-        time_shifting_factor=None
-    ):
-        cur_text = samples['input_ids'].cuda()
-        attention_mask = samples['attention_mask'].cuda()
-        if len(cur_text.shape) == 1:
-            cur_text = cur_text.unsqueeze(0)
-            attention_mask = attention_mask.unsqueeze(0)
-
-        input_embeds = self.model.model.word_embeddings(cur_text)
-
-        output_tokens = []
-        past_key_values = None
-        feat_dec_past_key_values = None
-
-        visual_position_indicators = cur_text == self.model.config.image_start_token
-        if self.model.config.image_patch_token in cur_text:
-            im_patch_mask = cur_text == self.model.config.image_patch_token
-            visual_position_indicators = torch.logical_or(visual_position_indicators, im_patch_mask)
-        max_token_length_for_gen = 256
-
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-            for token_idx in tqdm(range(max_token_length_for_gen)):
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                if past_key_values is not None:
-                    position_ids = position_ids[:, -1:]
-
-                if cfg_schedule == "linear":
-                    cfg_iter = 1 + (image_gen_cfg - 1) * (256 - token_idx) / 256
-                elif cfg_schedule == "linear-reverse":
-                    cfg_iter = 1 + (image_gen_cfg - 1) * token_idx / 255
-                elif cfg_schedule == "constant":
-                    cfg_iter = image_gen_cfg
-                else:
-                    raise NotImplementedError
-                output_model = self.model.forward_for_image_generation_inner(
-                    inputs_embeds=input_embeds,
-                    labels=None,
-                    labels_img=None,
-                    position_ids=position_ids,
-                    past_key_values=past_key_values,
-                    attention_mask=attention_mask,
-                    output_hidden_states=True,
-                    image_token_id=token_idx,
-                    image_gen_temperature=image_gen_temperature,
-                    image_gen_cfg=cfg_iter,
-                    visual_position_indicators=visual_position_indicators,
-                    cfg_renorm_type=cfg_renorm_type,
-                    time_shifting_factor=time_shifting_factor,
-                    use_cache=True,
-                )
-                output_token_gen = output_model[0]
-                past_key_values = output_model[1]
-
-                feat_dec_out = self.vision.forward_feature_decoder(
-                    output_token_gen,
-                    past_key_values=feat_dec_past_key_values,
-                )
-                feat_dec_past_key_values = feat_dec_out['past_key_values']
-                output_token = feat_dec_out['x_norm_patchtokens']
-                output_tokens.append(output_token)
-
-                input_embeds = self.linear_proj(output_token)
-
-                attention_mask = torch.cat(
-                    (attention_mask, torch.ones(attention_mask.shape[0], 1, dtype=attention_mask.dtype, device=attention_mask.device)),
-                    dim=-1
-                )
-                visual_position_indicators = torch.ones(input_embeds.shape[:2], dtype=torch.bool)
-
-        image_tensor = self.vision.forward_pixel_decoder(torch.cat(output_tokens, dim=1))
-        return image_tensor
-
-    @torch.no_grad()
     def generate(
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
+        uncond_attention_mask: Optional[torch.Tensor] = None,
+        text_uncond_attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         pixel_values: Optional[torch.FloatTensor] = None,
@@ -412,60 +220,89 @@ class MingUniVisionForConditionalGeneration(PreTrainedModel):
         audio_feats_lengths: Optional[torch.LongTensor] = None,
         audio_placeholder_loc_lens: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.Tensor]] = None,
-        image_gen: Optional[bool] = False,
-        image_gen_steps: Optional[int] = 30,
-        image_gen_seed: Optional[int] = 0,
-        image_gen_cfg: Optional[float] = 3.5,
-        image_gen_height: Optional[int] = 512,
-        image_gen_width: Optional[int] = 512,
-        image_gen_prompt: Optional[str] = "",
+        output_image_prefix: Optional[str] = "output",
+        image_gen_temperature: Optional[float] = 1.0,
+        image_gen_text_cfg: Optional[float] = 3.0,
+        image_gen_image_cfg: Optional[float] = 1.1,
         **generate_kwargs,
     ):
+        if self.past_key_values is not None and past_key_values is None:
+            past_key_values = self.past_key_values
+        if self.past_attention_mask is not None:
+            attention_mask = torch.cat((self.past_attention_mask, attention_mask),dim=1)
+            uncond_attention_mask = torch.cat((self.past_uncond_attention_mask, uncond_attention_mask), dim=1)
+            text_uncond_attention_mask = torch.cat((self.past_text_uncond_attention_mask, text_uncond_attention_mask), dim=1)
         image_embeds, video_embeds, audio_embeds, audio_embeds_lengths = None, None, None, None
         if pixel_values is not None:
             image_embeds = self.extract_image_feature(pixel_values, grid_thw=image_grid_thw)
         
-        if image_gen:
-            cfg_schedule = "constant"
-            image_gen_temperature = 1.0
-            cfg_renorm_type = None
-            time_shifting_factor = None
-            image_gen_cfg = 3.5
-            with_separator = True
-
-            image_tensor = self.unified_image_generation(
-                caption=image_gen_prompt,
-                image_gen_cfg=image_gen_cfg,
-                with_separator=with_separator,
-                cfg_schedule=cfg_schedule,
-                image_gen_temperature=image_gen_temperature,
-                cfg_renorm_type=cfg_renorm_type,
-                time_shifting_factor=time_shifting_factor,
-            )
-            return image_tensor
-
-        else:
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                if (image_embeds is None and video_embeds is None and audio_embeds is None) or input_ids.size(1) == 1:
-                    words_embeddings = self.model.get_input_embeddings()(input_ids.clip(0, self.model.get_input_embeddings().weight.shape[0] - 1))
-                    image_mask = None
-                    audio_mask = None
-                else:
-                    words_embeddings, image_mask, audio_mask = self.prompt_wrap_navit(
-                            input_ids.clip(0, self.model.get_input_embeddings().weight.shape[0] - 1), image_embeds, video_embeds, audio_embeds,
-                            audio_embeds_lengths, audio_placeholder_loc_lens, None
-                    )
-                # import pdb; pdb.set_trace()
-                outputs = self.model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=past_key_values,
-                    inputs_embeds=words_embeddings,
-                    use_cache=use_cache,
-                    image_mask=image_mask,
-                    audio_mask=audio_mask,
-                    rope_deltas=None,
-                    **generate_kwargs,
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            if (image_embeds is None and video_embeds is None and audio_embeds is None) or input_ids.size(1) == 1:
+                words_embeddings = self.model.get_input_embeddings()(input_ids.clip(0, self.model.get_input_embeddings().weight.shape[0] - 1))
+                image_mask = None
+                audio_mask = None
+            else:
+                words_embeddings, image_mask, audio_mask = self.prompt_wrap_navit(
+                        input_ids.clip(0, self.model.get_input_embeddings().weight.shape[0] - 1), image_embeds, video_embeds, audio_embeds,
+                        audio_embeds_lengths, audio_placeholder_loc_lens, None
                 )
-        return outputs
+            outputs = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                uncond_attention_mask=uncond_attention_mask,
+                text_uncond_attention_mask=text_uncond_attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=words_embeddings,
+                use_cache=use_cache,
+                image_mask=image_mask,
+                audio_mask=audio_mask,
+                rope_deltas=None,
+                latent_to_sem_func=self.vision.forward_feature_decoder,
+                linear_proj=self.linear_proj,
+                sem_to_pix_func=self.vision.forward_pixel_decoder,
+                output_image_prefix=output_image_prefix,
+                return_dict_in_generate=True,
+                image_gen_temperature=image_gen_temperature,
+                image_gen_text_cfg=image_gen_text_cfg,
+                image_gen_image_cfg=image_gen_image_cfg,
+                **generate_kwargs,
+            )   
+
+        # save states for future rounds
+        self.past_key_values = outputs.past_key_values
+        cache_length = self.past_key_values.get_seq_length()
+        pad_attn_mask = torch.ones(attention_mask.shape[0], cache_length-attention_mask.shape[1], dtype=attention_mask.dtype, device=attention_mask.device)
+        pad_uncond_attn_mask = torch.zeros(attention_mask.shape[0], cache_length-attention_mask.shape[1], dtype=attention_mask.dtype, device=attention_mask.device)
+
+        import os
+        past_mode = os.environ.get('PAST_MODE', "DROP")
+        if past_mode == "KEEP":
+            self.past_attention_mask = torch.cat((
+                        attention_mask, pad_attn_mask
+                    ), dim=1)
+            self.past_text_uncond_attention_mask = torch.cat((
+                        text_uncond_attention_mask, pad_attn_mask
+                    ), dim=1)
+            self.past_uncond_attention_mask = torch.cat((
+                        uncond_attention_mask, pad_uncond_attn_mask
+                    ), dim=1)
+        elif past_mode == "DROP":
+            self.past_attention_mask = torch.cat((
+                        attention_mask, pad_attn_mask
+                    ), dim=1)
+            self.past_text_uncond_attention_mask = torch.cat((
+                        attention_mask, pad_attn_mask
+                    ), dim=1)
+            self.past_uncond_attention_mask = torch.cat((
+                        attention_mask, pad_uncond_attn_mask
+                    ), dim=1)
+        self.model.reset_image_gen_status() # clear generated_images per round
+        return outputs.sequences
+
+    def reset_inner_state(self):
+        self.past_key_values = None
+        self.past_attention_mask = None
+        self.past_text_uncond_attention_mask = None
+        self.past_uncond_attention_mask = None
+        self.model.reset_image_gen_status()
