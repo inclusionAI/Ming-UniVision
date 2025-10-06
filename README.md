@@ -756,62 +756,87 @@ if __name__ == "__main__":
 ```
 
 ### 💬 Multi-Modal Inference with Ming-UniVision
-Use MingUniVisionInfer for unified tasks including text-to-image generation, image captioning, and visual question answering.
+Use MingUniVisionInfer for unified tasks including image generation, understanding, as well as single- and multi-round editing.
 
 ```python
-from mingunivisioninfer import MingUniVisionInfer, tensor_to_pil
-
-# Initialize model
+from mingunivisioninfer import MingUniVisionInfer
 model = MingUniVisionInfer("inclusionAI/Ming-UniVision-16B-A3B")
 
-# Text-to-image generation
-image_gen_prompt = "A beautiful girl."
+# single round generation
+image_gen_prompt = "Please generate the corresponding image based on the description. A cute girl."
 messages = [{
-    "role": "HUMAN",
-    "content": [{"type": "text", "text": image_gen_prompt}],
+  "role": "HUMAN",
+  "content": [{"type": "text", "text": image_gen_prompt},],
 }]
+output_text = model.generate(messages, max_new_tokens=512, output_image_prefix="a_cute_girl")
+model.reset_inner_state()
 
-img_tensor = model.generate(
-    messages,
-    max_new_tokens=512,
-    image_gen=True,
-    image_gen_prompt=image_gen_prompt,
-    image_gen_height=512,
-    image_gen_width=512
-)
-pil_img = tensor_to_pil(img_tensor)
-pil_img.save("a_beautiful_girl.jpg")
-print("Generated image saved as 'a_beautiful_girl.jpg'")
-
-# image captioning
+# single ground understanding
 messages = [{
-    "role": "HUMAN",
-    "content": [
-        {"type": "image", "image": "a_beautiful_girl.jpg"},
-        {"type": "text", "text": "Please describe the picture."},
-    ],
+  "role": "HUMAN",
+  "content": [
+    {"type": "image", "image": "a_cute_girl.png"},
+    {"type": "text", "text": "Please describe the picture in detail."},
+  ],
+}]
+output_text = model.generate(messages, max_new_tokens=512)
+print(output_text)
+model.reset_inner_state()
+
+# multi-round editing
+messages = [{
+  "role": "HUMAN",
+  "content": [
+    {"type": "image", "image": "a_cute_girl.png"},
+    {"type": "text", "text": "Given the edit instruction: Change the color of her cloth to red, please identify the editing region"},
+  ],
+}]
+output_text = model.generate(messages, max_new_tokens=512, for_edit=True, output_image_prefix="edit_round_0")
+
+messages = [{
+  "role": "HUMAN",
+  "content": [
+    {"type": "text", "text": "Change the color of her cloth to red."},
+  ],
+}]
+output_text = model.generate(messages, max_new_tokens=512, for_edit=True, output_image_prefix="edit_round_1")
+
+messages = [{
+  "role": "HUMAN",
+  "content": [
+    {"type": "text", "text": "Refine the image for better clarity."},
+  ],
+}]
+output_text = model.generate(messages, max_new_tokens=512, for_edit=True, output_image_prefix="edit_round_2")
+
+model.reset_inner_state()
+
+# single round text-based conversation
+messages = [{
+  "role": "HUMAN",
+  "content": [
+    {"type": "text", "text": "请详细介绍鹦鹉的习性。"},
+  ],
 }]
 
 output_text = model.generate(messages, max_new_tokens=512)
-print("Caption:", output_text)
-
-# text-only question answering
-messages = [{
-    "role": "HUMAN",
-    "content": [
-        {"type": "text", "text": "请详细介绍鹦鹉的习性。"},
-    ],
-}]
-
-output_text = model.generate(messages, max_new_tokens=512)
-print("Answer:", output_text)
+print(output_text)
+model.reset_inner_state()
 ```
 
 
 📌 Tips:
-- Set image_gen=True when generating images.
-- Supported input types: "text" and "image" in message list.
-- The model supports multi-round conversations by appending previous history to messages. (currently not supported, will be released in the coming weeks)
+- Image generation: Use descriptive prompts + output_image_prefix to save output.
+- Image understanding: Include "image" and "text" in the same message.
+- Image editing: Chain multiple generate(..., for_edit=True) calls with unique output_image_prefix names.
+- Multi-turn interactions are supported via internal state — call model.reset_inner_state() to reset.
+- Input types: "text" and "image" — flexible order, mixed inputs allowed.
+
+📝 Note (Model Limitations):
+- The current model was **trained with only two-turn conversations**, and has not been optimized for alternating rounds of image understanding and generation, although it may generalize to more than two turns during inference. As a result, performance may be limited in complex, multi-modal dialogue scenarios requiring deep contextual reasoning across turns.
+- This open-sourced version was **trained using mixed-resolution strategies**: high resolution for image understanding, but lower resolution for image editing and generation. Additionally, large-scale interleaved image-text data was not included during pretraining.
+- Due to these factors, *image editing quality and consistency may be suboptimal* compared to fully end-to-end, high-resolution multimodal models. We are actively working on improved versions with unified resolution training and richer interleaved data.
+
 
 Note: We test the examples on hardware of NVIDIA H800-80GB/H20-96G with CUDA 12.4.
 
