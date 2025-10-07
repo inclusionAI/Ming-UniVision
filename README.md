@@ -714,9 +714,9 @@ Ming-UniVision achieves top performance among unified representation models in t
 First, clone the repository and install the required dependencies:
 
 ```bash
-pip install -r requirements.txt
 git clone https://github.com/inclusionAI/Ming-UniVision.git
 cd Ming-UniVision
+pip install -r requirements.txt
 ```
 
 ### 🖼️ Image Reconstruction with MingTok-Vision

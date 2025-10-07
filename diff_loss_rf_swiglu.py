@@ -99,38 +99,6 @@ class RectifiedFlowLoss(nn.Module):
         print(f"Setting t_sample_strategy to {strategy}")
         self.t_sample_strategy = strategy
 
-    def forward(self, target, z, mask=None, repa_target=None):
-        """使用与原DiffLoss相同的参数接口计算Rectified Flow损失"""
-        batch_size = target.shape[0]
-        
-        # 随机采样时间点 t ∈ [0, 1]
-        if self.t_sample_strategy == "uniform":
-            t = torch.rand(batch_size, device=target.device)
-        elif self.t_sample_strategy == "lognorm":
-            t_mid = torch.normal(mean=0.0, std=1.0, size=(batch_size,), device=target.device)
-            t = 1 / (1 + torch.exp(-t_mid))
-
-        # 在t处插值得到x_t = (1-t)*x_0 + t*x_1，其中x_1是噪声，x_0是真实数据
-        noise = torch.randn_like(target)
-        t_view = t.view(-1, *([1] * (target.dim() - 1)))  # 适应任何维度的目标
-        x_t = (1 - t_view) * target + t_view * noise
-
-        # 计算真实速度场 v = x_0 - x_1
-        true_velocity = target - noise
-
-        # 预测速度场，保持与原始代码相同的接口
-        pred_velocity = self.net(x_t, t, z)
-
-        # 计算L2损失
-        loss = torch.nn.functional.mse_loss(pred_velocity, true_velocity, reduction='none')
-        loss = loss.mean(dim=-1)  # 在特征维度上平均
-
-        if mask is not None:
-            loss = (loss * mask).sum() / mask.sum()
-        else:
-            loss = loss.mean()
-
-        return loss
 
     def sample(
         self, 
@@ -145,17 +113,20 @@ class RectifiedFlowLoss(nn.Module):
         batch_size = z.shape[0]
         device = z.device
         b_num = z.shape[0]
+        generator = torch.Generator(device=device).manual_seed(123)
 
         if text_cfg != 1.0:
-            noise = torch.randn(1, self.in_channels, device=device)
+            # noise = torch.randn(1, self.in_channels, device=device)
+            noise = torch.randn(1, self.in_channels, device=device, generator=generator)
             noise = torch.cat([noise] * b_num, dim=0) * temperature
+            
         else:
-            noise = torch.randn(batch_size, self.in_channels, device=device) * temperature
+            # noise = torch.randn(batch_size, self.in_channels, device=device) * temperature
+            noise = torch.randn(batch_size, self.in_channels, device=device, generator=generator) * temperature
             
         # 使用欧拉法求解ODE
         x = noise
         steps = self.num_sampling_steps
-        # import ipdb;ipdb.set_trace()
         if time_shifting_factor:
             time_shifting_factor = float(time_shifting_factor)
             time_steps = torch.linspace(0.0, 1.0, steps + 1, device=device)
