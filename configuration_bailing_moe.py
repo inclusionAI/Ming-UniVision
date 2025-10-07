@@ -35,7 +35,7 @@ class BailingMoeConfig(PretrainedConfig):
         num_experts=16,
         num_shared_experts=0,
         num_experts_per_tok=2,
-        # num_image_tokens_for_gen=256,
+        num_image_tokens_for_gen=256,
         norm_topk_prob=True,
         moe_intermediate_size=None,
         first_k_dense_replace=0,
@@ -74,7 +74,7 @@ class BailingMoeConfig(PretrainedConfig):
         self.num_experts = num_experts
         self.num_shared_experts = num_shared_experts
         self.num_experts_per_tok = num_experts_per_tok
-        # self.num_image_tokens_for_gen=num_image_tokens_for_gen
+        self.num_image_tokens_for_gen=num_image_tokens_for_gen
         self.norm_topk_prob = norm_topk_prob
         self.moe_intermediate_size = moe_intermediate_size
         self.first_k_dense_replace = first_k_dense_replace

@@ -1,8 +1,10 @@
 
 
 import os
+import torch
 from mingunivisioninfer import MingUniVisionInfer
 model = MingUniVisionInfer("inclusionAI/Ming-UniVision-16B-A3B")
+torch.manual_seed(123)
 
 # single round generation
 image_gen_prompt = "Please generate the corresponding image based on the description. A cute girl."

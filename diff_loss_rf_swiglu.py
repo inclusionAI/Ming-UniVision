@@ -113,16 +113,13 @@ class RectifiedFlowLoss(nn.Module):
         batch_size = z.shape[0]
         device = z.device
         b_num = z.shape[0]
-        generator = torch.Generator(device=device).manual_seed(123)
 
         if text_cfg != 1.0:
-            # noise = torch.randn(1, self.in_channels, device=device)
-            noise = torch.randn(1, self.in_channels, device=device, generator=generator)
+            noise = torch.randn(1, self.in_channels, device=device)
             noise = torch.cat([noise] * b_num, dim=0) * temperature
             
         else:
-            # noise = torch.randn(batch_size, self.in_channels, device=device) * temperature
-            noise = torch.randn(batch_size, self.in_channels, device=device, generator=generator) * temperature
+            noise = torch.randn(batch_size, self.in_channels, device=device) * temperature
             
         # 使用欧拉法求解ODE
         x = noise
