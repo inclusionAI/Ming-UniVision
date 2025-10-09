@@ -4,7 +4,8 @@
     <img src="./figures/ant-bailing.png" width="100"/>
 <p>
 
-<p align="center">📖<a href="https://inclusionai.github.io/blog/mingtok/">Project Page</a> ｜🤗 <a href="https://huggingface.co/inclusionAI/Ming-UniVision-16B-A3B">Hugging Face</a>｜ 🤖 <a href="https://www.modelscope.cn/models/inclusionAI/Ming-UniVision-16B-A3B">ModelScope</a>
+<p align="center">📄 <a href="https://arxiv.org/pdf/2510.06590">Technical Report</a> | 📖<a href="https://inclusionai.github.io/blog/mingtok/">Project Page</a> ｜🤗 <a href="https://huggingface.co/inclusionAI/Ming-UniVision-16B-A3B">Hugging Face</a>｜ 🤖 <a href="https://www.modelscope.cn/models/inclusionAI/Ming-UniVision-16B-A3B">ModelScope</a></p>
+
 
 
 
@@ -31,14 +32,19 @@ All modalities and tasks share one coherent feature space — simpler training, 
 
 ## 📌 Updates
 
-* [2025.10.02] 🔥 **We’re live!**
-We’re thrilled to announce the release of Ming-UniVision and MingTok-Vision — the first joint autoregressive vision-language system with unified continuous visual tokenization!
+* [2025.10.09] 📄 **Technical Report Released!**  
+  The full technical report is now available on arXiv:  
+  👉 [arXiv:2510.06590 | Ming-UniVision: Joint Image Understanding and Generation with a Unified Continuous Tokenizer](https://arxiv.org/pdf/2510.06590)  
+  Dive into the architecture, unified continuous tokenizer, and end-to-end autoregressive framework that power our system.
 
-✨ Enable seamless multimodal reasoning, generation, and editing in a single latent space.
+* [2025.10.02] 🔥 **We’re live!**  
+  We’re thrilled to announce the release of **Ming-UniVision** and **MingTok-Vision** — the first joint autoregressive vision-language system with unified continuous visual tokenization!  
 
-🚀 Faster training, richer semantics, and true end-to-end autoregression — no quantization, no compromises.
+  ✨ Enable seamless multimodal reasoning, generation, and editing in a single latent space.  
+  🚀 Faster training, richer semantics, and true end-to-end autoregression — no quantization, no compromises.  
 
-👉 Check out our [blog post](https://inclusionai.github.io/blog/mingtok/) to learn how we’re redefining unified vision-language intelligence.
+  👉 Check out our [blog post](https://inclusionai.github.io/blog/mingtok/) to learn how we’re redefining unified vision-language intelligence.
+
 
 
 
@@ -845,6 +851,11 @@ Note: We test the examples on hardware of NVIDIA H800-80GB/H20-96G with CUDA 12.
 
 If you find our work useful in your research or applications, please consider citing:
 ```
-TBD
+@article{huang2025mingunivision,
+  title={Ming-UniVision: Joint Image Understanding and Generation with a Unified Continuous Tokenizer},
+  author={Huang, Ziyuan and Zheng, DanDan and Zou, Cheng and Liu, Rui and Wang, Xiaolong and Ji, Kaixiang and Chai, Weilong and Sun, Jianxin and Wang, Libin and Lv, Yongjie and Huang, Taozhi and Liu, Jiajia and Guo, Qingpei and Yang, Ming and Chen, Jingdong and Zhou, Jun},
+  journal={arXiv preprint arXiv:2510.06590},
+  year={2025}
+}
 ```
 
