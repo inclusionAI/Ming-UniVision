@@ -722,7 +722,24 @@ First, clone the repository and install the required dependencies:
 ```bash
 git clone https://github.com/inclusionAI/Ming-UniVision.git
 cd Ming-UniVision
-pip install -r requirements.txt
+conda create -n ming python=3.10 -y
+conda activate ming
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+pip install flash_attn
+modelscope download --model inclusionAI/Ming-UniVision-16B-A3B --local_dir ./models/Ming-UniVision-16B-A3B
+modelscope download --model inclusionAI/MingTok-Vision --local_dir ./models/MingTok-Vision
+```
+
+### 💬 Quick start
+```bash
+# >=44GB VRAM
+python app.py
+
+# >=22GB VRAM
+python app.py --dtype int8
+
+# >=14GB VRAM
+python app.py --dtype int4
 ```
 
 ### 🖼️ Image Reconstruction with MingTok-Vision
@@ -738,7 +755,7 @@ from mingtok.utils import CenterCropProcessor
 
 if __name__ == "__main__":
     # Load model
-    mingtok_model = MingTok.from_pretrained("inclusionAI/MingTok-Vision")
+    mingtok_model = MingTok.from_pretrained("./models/MingTok-Vision")
     mingtok_model = mingtok_model.cuda()
 
     img_path = "mingtok/asset/mingtok.png"
@@ -766,7 +783,7 @@ Use MingUniVisionInfer for unified tasks including image generation, understandi
 
 ```python
 from mingunivisioninfer import MingUniVisionInfer
-model = MingUniVisionInfer("inclusionAI/Ming-UniVision-16B-A3B")
+model = MingUniVisionInfer("./models/Ming-UniVision-16B-A3B")
 
 # single round generation
 image_gen_prompt = "Please generate the corresponding image based on the description. A cute girl."

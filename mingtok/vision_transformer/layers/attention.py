@@ -225,6 +225,10 @@ class MemEffCausalAttention(CausalAttention):
                         cache_kwargs)
                     k = k.transpose(1, 2)
                     v = v.transpose(1, 2)
+                    if q.dtype not in [torch.float16, torch.bfloat16]:
+                        q = q.to(torch.bfloat16)
+                        k = k.to(torch.bfloat16)
+                        v = v.to(torch.bfloat16)
                     x = flash_attn_func(q, k, v, causal=True)
                 else:
                     x = flash_attn_func(q, k, v, causal=True)

@@ -1,30 +1,23 @@
+import sys
 import os
-import time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch
 from transformers import AutoProcessor
 
 from modeling_bailingmm import MingUniVisionForConditionalGeneration
-from IPython import embed
-import torchvision
-from PIL import Image
-import re
-
-import torch.nn as nn
-from collections import defaultdict
-from bailingmm_utils import process_ratio
 import torchvision.transforms as T
 import warnings
-import argparse
 from transformers import (
     AutoProcessor,
     AutoTokenizer,
+    QuantoConfig,
+    BitsAndBytesConfig,
 )
 
 warnings.filterwarnings("ignore")
 
 
 def tensor_to_pil(image_tensor):
-    """将tensor转换为PIL图像"""
     mean = torch.Tensor([0.5,0.5,0.5]).view(1,-1,1,1).cuda()
     std = torch.Tensor([0.5,0.5,0.5]).view(1,-1,1,1).cuda()
     image_tensor = (image_tensor*std + mean)[0]
@@ -33,26 +26,56 @@ def tensor_to_pil(image_tensor):
 
 
 class MingUniVisionInfer:
-    def __init__(self,
-        model_name_or_path
+    def __init__(
+        self,
+        model_name_or_path,
+        dtype="bf16",
     ):
         super().__init__()
         self.model_name_or_path = model_name_or_path
+        self.dtype = dtype
         self.model, self.tokenizer, self.processor = self.load_model_processor()
         self.model.tokenizer = self.tokenizer
         self.model.model.tokenizer = self.tokenizer
+        
 
     def load_model_processor(self):
-        tokenizer = AutoTokenizer.from_pretrained(".", trust_remote_code=True)
-        processor = AutoProcessor.from_pretrained(".", trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained("./mingunivision", trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained("./mingunivision", trust_remote_code=True)
         
-        model = MingUniVisionForConditionalGeneration.from_pretrained(
-            self.model_name_or_path,
-            torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
-            trust_remote_code=True,
-        )
-        model = model.to("cuda", dtype=torch.bfloat16)
+        if self.dtype == "int4":
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_quant_type="nf4",
+                llm_int8_skip_modules=["BailingAudioModel"]   
+            )
+            model = MingUniVisionForConditionalGeneration.from_pretrained(
+                self.model_name_or_path,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+                quantization_config=quantization_config,
+                trust_remote_code=True,
+                device_map="cuda"
+            )
+        elif self.dtype == "int8":
+            quantization_config = QuantoConfig(weights="int8", modules_to_not_convert=["BailingAudioModel"])
+            model = MingUniVisionForConditionalGeneration.from_pretrained(
+                self.model_name_or_path,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+                quantization_config=quantization_config,
+                trust_remote_code=True,
+                device_map="cuda"
+            )
+        else:
+            model = MingUniVisionForConditionalGeneration.from_pretrained(
+                self.model_name_or_path,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+                trust_remote_code=True,
+                device_map="cuda"
+            )
 
         return model, tokenizer, processor
 
