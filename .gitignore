@@ -37,3 +37,6 @@ build/*
 dist/*
 ming_sdk.egg-info/*
 *.mp4
+/.glut
+*.bat
+/models
