@@ -5,7 +5,7 @@ gradio
 tokenizers
 funasr==1.1.14
 peft==0.13.2
-diffusers==0.33.0
+diffusers==0.38.0
 decord==0.6.0
 hyperpyyaml==1.2.2
 modelscope
