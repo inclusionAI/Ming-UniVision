@@ -20,7 +20,7 @@ av==12.3.0
 soundfile==0.12.1
 librosa
 rich
-transformers==4.52.4
+transformers==5.10.1
 wget
 IPython
 pandas==2.3.2
